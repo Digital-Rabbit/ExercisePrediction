@@ -1,0 +1,212 @@
+---
+title: "Predicting the Correctness of Dumbbell Biceps Curl Exercises"
+author:  B. Laden
+date: "August 16, 2014"
+output: html_document
+---
+
+### Executive Summary
+The report seeks to answer the question: Can the correctness of an exercise be 
+predicted by sensor data? It uses bagging and random forest to construct a
+prediction model. The random forest model has the lowest error rate for prediction,
+3.3%. The model was applied to a small set of test data for which the outcome 
+is unknown. 
+
+### The Question
+If you've ever worked out with a personal trainer, you'll understand not only
+the importance of exercise, but of performing each exercise correctly. Incorrect 
+movements can result in toning the wrong muscles, not toning the full range of a
+muscle, and, more seriously, back injury. 
+
+Velloso, Bulling, Gellersen, Ugulino, and Fuks (2013) used sensors 
+to collect data from 6 people who were performing bicep curls. The subjects were instructed to perform the exercise in five different ways:
+
+* Exactly according to the specification (class A)
+* Throwing the elbows to the front (class B)
+* Lifting the dumbbell only halfway (class C)
+* Lowering the dumbbell only halfway (class D)
+* Throwing the hips to the front (class E)
+
+The question they examined in their paper, and what I attempt to answer in this report,
+is: Can the correctness of an exercise be predicted by sensor data?
+
+### Getting the Data
+
+I used two datasets. The first consists of 19,622 observations of 160 variables.
+The second has 20 observations of 160 variables.The first set has a "classe"" variable
+that specifies how the subject performed the exercise (see previous section).
+The second set does not contain a "classe"" variable.
+
+```{r}
+fileURL1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+fileURL2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileURL1,destfile="pml-training.csv",method="curl")
+download.file(fileURL2,destfile="pml-testing.csv",method="curl")
+weightsData <- read.csv("pml-training.csv")
+smallTestData <- read.csv("pml-testing.csv")
+```
+
+I'll use the first dataset (weightsData) to build and validate a machine learning algorithm. 
+I'll make predictions for the smaller test set (smallTest).
+
+### Cleaning and Subsetting the Data
+When I looked at the head of the weights dataset, I noticed many columns had NA entries.
+Upon further inspection, NA appeared to run the full length of many columns, with only an
+occasional entry. Other variables, such as new_window, num_window, user_name, and 
+several columns of timestamp data didn't seem useful. So I removed the NA columns
+as well as these other columns. I also removed the belt-related data. While thursting
+one's hips forward is certainly an incorrect move for a bicep curl, I suspect the
+forearm, arm, and dumbell movements will reflect this type of incorrect movement. 
+(Also, I've spent a lot of time in the gym; the hip-thrusters also tend to flail
+their arms.) I used the subset command to pare down each dataset to 25 predictors.
+As you can see, the weights data has the outcome—classe—while the smallTest dataset does not.
+
+```{r}
+weights <- subset(weightsData,select=c(classe,roll_arm, pitch_arm, yaw_arm,
+               total_accel_arm, gyros_arm_x, gyros_arm_y,gyros_arm_z,    
+               accel_arm_x, accel_arm_y, accel_arm_z, magnet_arm_x,magnet_arm_y,magnet_arm_z,
+               roll_dumbbell,pitch_dumbbell, yaw_dumbbell,gyros_forearm_x, gyros_forearm_y, 
+               gyros_forearm_z, accel_forearm_x, accel_forearm_y,accel_forearm_z, magnet_forearm_x, 
+               magnet_forearm_y,magnet_forearm_z))
+smallTest <- subset(smallTestData,select=c(roll_arm, pitch_arm, yaw_arm,
+               total_accel_arm, gyros_arm_x, gyros_arm_y,gyros_arm_z,    
+               accel_arm_x, accel_arm_y, accel_arm_z, magnet_arm_x,magnet_arm_y,magnet_arm_z,
+               roll_dumbbell,pitch_dumbbell, yaw_dumbbell, gyros_forearm_x, gyros_forearm_y, 
+               gyros_forearm_z, accel_forearm_x, accel_forearm_y,accel_forearm_z, magnet_forearm_x, 
+               magnet_forearm_y,magnet_forearm_z))
+```
+
+Note that Velloso, et al. used 13 predictors in their paper. My purpose here is not
+to reproduce what they did, but to explore this dataset myself.
+
+The weights data set needs to be partitioned into training and testing data. That way,
+I can train and validate the predictions. I chose 60% as the split between training and testing.
+```{r message=FALSE}
+require(caret)
+train <- createDataPartition(y=weights$classe,p=0.6,list=FALSE)
+```
+
+### Constructing Prediction Algorithms
+I decided to use bagging and random forest to construct a prediction algorithm. 
+Given the number of predictors, I decided to try a few approaches and choose the
+one with the lowest prediction error. 
+
+#### Bagging
+I followed an approach outlined in _An 
+Introduction to Statistical Learning_ (2013) in which the randomForest function 
+is used to perform bagging by setting m = p. As you can see, all 25 predictors
+will be tried at every branch of the decision tree.
+
+```{r message=FALSE}
+require(randomForest)
+set.seed(1)          
+bag.weights = randomForest(classe~.,data=weights,subset=train,mtry=25,importance=TRUE)
+```
+
+The out of bag estimate of error rate is 4.65% with this confusion matrix:
+```{r}
+bag.weights$conf
+```
+
+Next I'll see how well the bagging model performs on the testing subset of the
+weights dataset:
+```{r}
+yhat.bag <- predict(bag.weights,newdata=weights[-train,])
+actual <- weights[-train,"classe"]
+correct <- yhat.bag == actual
+errorRate <- 1.0 - sum(correct)/length(correct)
+errorRate
+```
+The error rate is 4.41%
+
+The model uses 500 trees. Could it be improved by using fewer? Next I add the
+ntrees parameter, setting it to 50 to see if I can get a lower error rate. 
+```{r}
+set.seed(1) 
+bag.weights = randomForest(classe~.,data=weights,subset=train,mtry=25,ntree=50)
+```
+The out of bag error rate is 5.89%, not what I wanted! I'd rather see the error
+decrease. As expected, the prediction for the testing portion of the weights
+dataset has a higher error rate than that for the 500-tree version, 4.64%
+```{r}
+yhat.bag <- predict(bag.weights,newdata=weights[-train,])
+actual <- weights[-train,"classe"]
+correct <- yhat.bag == actual
+errorRate <- 1.0 - sum(correct)/length(correct)
+errorRate
+```
+
+#### Random Forest
+Next I tried a random forest model. I used the same function, but set mtry to
+a smaller value to use random forest rather than bagging (recall, for bagging m = p). The 
+randomForest function should default to the square root of the predictors for
+mtry, but I explictly entered it here. (5 = square root of 25).
+```{r}
+set.seed(1)
+rf.weights = randomForest(classe~.,data=weights,subset=train,mtry=5,importance=TRUE)
+```
+The out of bag error rate is 3.48%, better than wither of the bagging models. Here's the 
+confusion matrix:
+```{r}
+rf.weights$conf
+```
+The prediction rate for the testing subset is 3.30%.
+```{r}
+yhat.rf <- predict(rf.weights,newdata=weights[-train,])
+actual <- weights[-train,"classe"]
+correct <- yhat.rf == actual
+errorRate <- 1.0 - sum(correct)/length(correct)
+errorRate
+```
+
+The random forest model appears to do a better job predicting the outcome. 
+
+#### Importance
+Importance indicates the accuracy of predictors. The plot on the left shows the importance using permutation, while the plot on the right uses the faster Gini method. The one striking consistency is that the roll_arm and roll_dumbbell predictors have lowest accuracy on each. Perhaps eliminating those as
+predictors would improve the model even further.
+```{r}
+varImpPlot(rf.weights)
+```
+
+#### Cross Validation
+According to the Random Forests Manual (Breiman and Cutler), random forest does
+its own internal cross validation. That's why I did not not perform any additional
+computations—they are built-in to random forest.
+
+Note also that I split the large dataset (weights) into
+training and testing subsets. Thus I was able to validate the prediction function
+by using the testing subset of the weights dataset. 
+
+
+### Predicting the Outcome of New Data
+The true test of a machine learning algorithm is whether it can predict correctly
+the outcome of new data. I applied the model to the smallTest dataset. I have
+no way to assess the error rate because the true classification was not supplied.
+However, if this model were connected to a "digital personal trainer", it would
+be supplying advice 13 times and saying "great job" 7 times!
+```{r, echo=FALSE}
+yhat.rf <- predict(rf.weights,newdata=smallTest) 
+yhat.rf
+```
+
+
+### Conclusion
+The relatively low error rate for classifying correct and incorrect exercise
+movements shows promise for a "digital personal trainer." For this data, the
+random forest approach provided better results than bagging. Future research in this area might focus on reducing the number of predictors. I used 25. Velloso et al. used 13. The Importance plots suggest two predictors that could be removed. 
+
+There might be a way—either through data exploration or improvement of sensors—to
+reduce the data needed for prediction.  Less data will mean better real-time
+performance for a "digital personal trainer." Real-time feedback is critical to
+improving at exercise.
+
+### Bibliography
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. _Qualitative 
+Activity Recognition of Weight Lifting Exercises_. Proceedings of 4th 
+International Conference in Cooperation with SIGCHI (Augmented Human 13) .
+Stuttgart, Germany: ACM SIGCHI, 2013.
+
+James, G.; Witten, D.; Hastie, T; and Tibshirani, R. _An Introduction to 
+Statistical Learning with Applications in R_, Springer, 2013.
+
+Breiman, L. and Cutler, A. _Random Forests Manual_. http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr
